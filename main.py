@@ -154,9 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--doc", type=Path, default=DEFAULT_DOC_PATH, help="Path to the document to query"
     )
-    parser.add_argument(
-        "--no-chat", action="store_true", help="Skip the interactive chat tail"
-    )
+    parser.add_argument("--no-chat", action="store_true", help="Skip the interactive chat tail")
     parser.add_argument(
         "--ttl", type=int, default=DEFAULT_TTL_SECONDS, help="Explicit cache TTL in seconds"
     )

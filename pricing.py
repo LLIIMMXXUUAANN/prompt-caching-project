@@ -11,9 +11,7 @@ CACHED_INPUT_PRICE_PER_MILLION_TOKENS = 0.075
 CACHE_STORAGE_PRICE_PER_MILLION_TOKENS_PER_HOUR = 1.00
 
 
-def estimate_generation_cost(
-    prompt_tokens: int, cached_tokens: int, output_tokens: int
-) -> float:
+def estimate_generation_cost(prompt_tokens: int, cached_tokens: int, output_tokens: int) -> float:
     """Estimate USD cost of one generate_content call.
 
     `cached_tokens` is billed at the discounted rate; the remainder of
@@ -30,7 +28,5 @@ def estimate_cache_storage_cost(cached_tokens: int, seconds_alive: float) -> flo
     """Estimate USD cost of keeping an explicit cache alive for a duration."""
     hours_alive = seconds_alive / 3600
     return (
-        (cached_tokens / 1_000_000)
-        * CACHE_STORAGE_PRICE_PER_MILLION_TOKENS_PER_HOUR
-        * hours_alive
+        (cached_tokens / 1_000_000) * CACHE_STORAGE_PRICE_PER_MILLION_TOKENS_PER_HOUR * hours_alive
     )

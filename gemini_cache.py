@@ -41,9 +41,7 @@ def count_tokens(client: genai.Client, text: str) -> int:
     return response.total_tokens or 0
 
 
-def _to_result(
-    response: types.GenerateContentResponse, elapsed_seconds: float
-) -> GenerationResult:
+def _to_result(response: types.GenerateContentResponse, elapsed_seconds: float) -> GenerationResult:
     usage = response.usage_metadata
     # usage_metadata (and its token-count fields) are Optional in the SDK;
     # normalize any missing values to 0 rather than propagating None into
@@ -60,9 +58,7 @@ def _to_result(
     )
 
 
-def generate_without_cache(
-    client: genai.Client, doc_text: str, question: str
-) -> GenerationResult:
+def generate_without_cache(client: genai.Client, doc_text: str, question: str) -> GenerationResult:
     start = time.monotonic()
     response = client.models.generate_content(
         model=MODEL_NAME,
@@ -78,18 +74,14 @@ def create_explicit_cache(
     return client.caches.create(
         model=MODEL_NAME,
         config=types.CreateCachedContentConfig(
-            contents=[
-                types.Content(role="user", parts=[types.Part.from_text(text=doc_text)])
-            ],
+            contents=[types.Content(role="user", parts=[types.Part.from_text(text=doc_text)])],
             display_name="prompt-caching-demo",
             ttl=f"{ttl_seconds}s",
         ),
     )
 
 
-def generate_with_cache(
-    client: genai.Client, cache_name: str, question: str
-) -> GenerationResult:
+def generate_with_cache(client: genai.Client, cache_name: str, question: str) -> GenerationResult:
     start = time.monotonic()
     response = client.models.generate_content(
         model=MODEL_NAME,

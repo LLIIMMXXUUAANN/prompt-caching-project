@@ -16,9 +16,7 @@ def test_fully_cached_prompt_bills_cached_rate_only():
 
 
 def test_partial_cache_is_cheaper_than_no_cache():
-    baseline = estimate_generation_cost(
-        prompt_tokens=10_000, cached_tokens=0, output_tokens=200
-    )
+    baseline = estimate_generation_cost(prompt_tokens=10_000, cached_tokens=0, output_tokens=200)
     with_cache = estimate_generation_cost(
         prompt_tokens=10_000, cached_tokens=9_000, output_tokens=200
     )
