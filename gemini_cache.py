@@ -37,16 +37,25 @@ def get_client() -> genai.Client:
 
 def count_tokens(client: genai.Client, text: str) -> int:
     response = client.models.count_tokens(model=MODEL_NAME, contents=text)
+    # total_tokens is int | None in the SDK; normalize missing to 0
     return response.total_tokens or 0
 
 
-def _to_result(response, elapsed_seconds: float) -> GenerationResult:
+def _to_result(
+    response: types.GenerateContentResponse, elapsed_seconds: float
+) -> GenerationResult:
     usage = response.usage_metadata
+    # usage_metadata (and its token-count fields) are Optional in the SDK;
+    # normalize any missing values to 0 rather than propagating None into
+    # downstream arithmetic (pricing.estimate_generation_cost, ModeStats).
+    prompt_tokens = (usage.prompt_token_count or 0) if usage else 0
+    cached_tokens = (usage.cached_content_token_count or 0) if usage else 0
+    output_tokens = (usage.candidates_token_count or 0) if usage else 0
     return GenerationResult(
-        text=response.text,
-        prompt_tokens=usage.prompt_token_count,
-        cached_tokens=usage.cached_content_token_count or 0,
-        output_tokens=usage.candidates_token_count,
+        text=response.text or "",
+        prompt_tokens=prompt_tokens,
+        cached_tokens=cached_tokens,
+        output_tokens=output_tokens,
         latency_seconds=elapsed_seconds,
     )
 
@@ -62,7 +71,10 @@ def generate_without_cache(
     return _to_result(response, time.monotonic() - start)
 
 
-def create_explicit_cache(client: genai.Client, doc_text: str, ttl_seconds: int):
+def create_explicit_cache(
+    client: genai.Client, doc_text: str, ttl_seconds: int
+) -> types.CachedContent:
+    """Create an explicit cache holding doc_text, expiring after ttl_seconds."""
     return client.caches.create(
         model=MODEL_NAME,
         config=types.CreateCachedContentConfig(
