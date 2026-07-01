@@ -1,4 +1,8 @@
-from pricing import estimate_cache_storage_cost, estimate_generation_cost
+from pricing import (
+    estimate_cache_creation_cost,
+    estimate_cache_storage_cost,
+    estimate_generation_cost,
+)
 
 
 def test_no_cache_bills_full_input_and_output_rates():
@@ -48,3 +52,31 @@ def test_cache_storage_cost_scales_with_time():
 def test_cache_storage_cost_zero_time_is_free():
     cost = estimate_cache_storage_cost(cached_tokens=1_000_000, seconds_alive=0)
     assert cost == 0.0
+
+
+def test_cache_creation_cost_bills_at_standard_input_rate():
+    cost = estimate_cache_creation_cost(token_count=1_000_000)
+    assert cost == 0.30
+
+
+def test_cache_creation_cost_scales_with_tokens():
+    cost = estimate_cache_creation_cost(token_count=500_000)
+    assert cost == 0.15
+
+
+def test_cache_creation_cost_matches_standard_uncached_input_cost():
+    # Creation must use the same standard input rate as an ordinary,
+    # fully-uncached generation call — never the discounted cached rate.
+    creation_cost = estimate_cache_creation_cost(token_count=42_000)
+    equivalent_generation_cost = estimate_generation_cost(
+        prompt_tokens=42_000, cached_tokens=0, output_tokens=0
+    )
+    assert creation_cost == equivalent_generation_cost
+
+
+def test_negative_billed_input_is_floored_at_zero():
+    # A malformed response with cached_tokens > prompt_tokens must not
+    # produce a negative cost.
+    cost = estimate_generation_cost(prompt_tokens=100, cached_tokens=500, output_tokens=0)
+    assert cost == estimate_generation_cost(prompt_tokens=500, cached_tokens=500, output_tokens=0)
+    assert cost >= 0

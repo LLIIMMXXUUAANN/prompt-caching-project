@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google.genai import types
+from google import genai
 
 import gemini_cache
 import pricing
@@ -47,40 +48,59 @@ class ModeStats:
         return self.total_latency / self.call_count if self.call_count else 0.0
 
 
-def run_no_cache_mode(client, doc_text: str) -> ModeStats:
-    stats = ModeStats(mode_name="No cache")
+@dataclass
+class ExplicitCacheOverhead:
+    """One-time and time-based costs of the explicit cache itself.
+
+    Kept separate from ModeStats.total_cost (the per-question generation
+    cost) so the table shows exactly what per-question caching saves,
+    without silently folding in the cost of creating/storing the cache.
+    """
+
+    token_count: int
+    seconds_alive: float
+    creation_cost: float
+    storage_cost: float
+
+    @property
+    def total(self) -> float:
+        return self.creation_cost + self.storage_cost
+
+
+def _run_uncached_mode(client: genai.Client, doc_text: str, mode_name: str) -> ModeStats:
+    # Shared by "No cache" and "Implicit cache": both modes make the exact
+    # same API call and only differ in label — the whole point is that
+    # implicit caching isn't a distinct code path, just an automatic,
+    # unguaranteed server-side behavior observed on ordinary calls.
+    stats = ModeStats(mode_name=mode_name)
     for question in QUESTIONS:
         try:
             result = gemini_cache.generate_without_cache(client, doc_text, question)
         except Exception as exc:
-            print(f"  [No cache] question failed: {question!r} -> {exc}")
+            print(f"  [{mode_name}] question failed: {question!r} -> {exc}")
             continue
         stats.record(result)
     return stats
 
 
-def run_implicit_cache_mode(client, doc_text: str) -> ModeStats:
-    stats = ModeStats(mode_name="Implicit cache")
-    for question in QUESTIONS:
-        try:
-            result = gemini_cache.generate_without_cache(client, doc_text, question)
-        except Exception as exc:
-            print(f"  [Implicit cache] question failed: {question!r} -> {exc}")
-            continue
-        stats.record(result)
-    return stats
+def run_no_cache_mode(client: genai.Client, doc_text: str) -> ModeStats:
+    return _run_uncached_mode(client, doc_text, "No cache")
+
+
+def run_implicit_cache_mode(client: genai.Client, doc_text: str) -> ModeStats:
+    return _run_uncached_mode(client, doc_text, "Implicit cache")
 
 
 def run_explicit_cache_mode(
-    client, doc_text: str, ttl_seconds: int
-) -> tuple[ModeStats, types.CachedContent | None]:
+    client: genai.Client, doc_text: str, ttl_seconds: int
+) -> tuple[ModeStats, ExplicitCacheOverhead | None]:
     stats = ModeStats(mode_name="Explicit cache")
     token_count = gemini_cache.count_tokens(client, doc_text)
     if token_count < gemini_cache.EXPLICIT_CACHE_MIN_TOKENS:
         print(
             f"  Document is {token_count} tokens, below the "
             f"{gemini_cache.EXPLICIT_CACHE_MIN_TOKENS}-token minimum for explicit "
-            "caching. Skipping explicit cache mode and interactive chat."
+            "caching. Skipping explicit cache mode."
         )
         return stats, None
 
@@ -90,15 +110,44 @@ def run_explicit_cache_mode(
     # changes rather than silently passing None into downstream calls.
     if cache.name is None:
         raise RuntimeError("Explicit cache was created without a name (unexpected API response)")
+    # Prefer the cache's own authoritative token count (what Google actually
+    # billed for creation/storage) over the pre-flight estimate used only for
+    # the min-token gate above — they can differ slightly since the SDK wraps
+    # doc_text in a Content/Part structure with its own small overhead.
+    billed_token_count = (
+        cache.usage_metadata.total_token_count
+        if cache.usage_metadata and cache.usage_metadata.total_token_count
+        else token_count
+    )
+    # Creating the cache means Google processes doc_text for the first time,
+    # billed at the standard input rate (not the discounted cached rate).
+    creation_cost = pricing.estimate_cache_creation_cost(billed_token_count)
+    created_at = time.monotonic()
 
-    for question in QUESTIONS:
-        try:
-            result = gemini_cache.generate_with_cache(client, cache.name, question)
-        except Exception as exc:
-            print(f"  [Explicit cache] question failed: {question!r} -> {exc}")
-            continue
-        stats.record(result)
-    return stats, cache
+    try:
+        for question in QUESTIONS:
+            try:
+                result = gemini_cache.generate_with_cache(client, cache.name, question)
+            except Exception as exc:
+                print(f"  [Explicit cache] question failed: {question!r} -> {exc}")
+                continue
+            stats.record(result)
+    finally:
+        # Always release the cache, even on an unexpected error mid-loop,
+        # so it doesn't sit around accruing storage cost until its TTL expires.
+        seconds_alive = time.monotonic() - created_at
+        gemini_cache.delete_cache(client, cache.name)
+
+    storage_cost = pricing.estimate_cache_storage_cost(
+        cached_tokens=billed_token_count, seconds_alive=seconds_alive
+    )
+    overhead = ExplicitCacheOverhead(
+        token_count=billed_token_count,
+        seconds_alive=seconds_alive,
+        creation_cost=creation_cost,
+        storage_cost=storage_cost,
+    )
+    return stats, overhead
 
 
 def print_comparison_table(modes: list[ModeStats]) -> None:
@@ -116,6 +165,21 @@ def print_comparison_table(modes: list[ModeStats]) -> None:
             f"{stats.total_output_tokens:>11} {stats.total_thinking_tokens:>10} "
             f"{stats.average_latency:>11.2f}s ${stats.total_cost:>9.6f}"
         )
+    print()
+
+
+def print_explicit_cache_overhead(stats: ModeStats, overhead: ExplicitCacheOverhead | None) -> None:
+    if overhead is None:
+        return
+    grand_total = stats.total_cost + overhead.total
+    print("Explicit cache overhead (not included in the table's Est. cost column):")
+    print(
+        f"  Cache creation  ({overhead.token_count} tokens, billed at input rate): "
+        f"${overhead.creation_cost:.6f}"
+    )
+    print(f"  Cache storage   (alive {overhead.seconds_alive:.1f}s): ${overhead.storage_cost:.6f}")
+    print(f"  Per-question usage (from table above): ${stats.total_cost:.6f}")
+    print(f"  Total explicit cache cost: ${grand_total:.6f}")
     print()
 
 
@@ -152,16 +216,11 @@ def main() -> None:
     implicit_stats = run_implicit_cache_mode(client, doc_text)
 
     print("Mode 3/3: Explicit cache...")
-    explicit_stats, cache = run_explicit_cache_mode(client, doc_text, args.ttl)
+    explicit_stats, explicit_overhead = run_explicit_cache_mode(client, doc_text, args.ttl)
 
     print_comparison_table([no_cache_stats, implicit_stats, explicit_stats])
-
-    if cache is None:
-        return
-    assert cache.name is not None  # guaranteed by run_explicit_cache_mode's own check
-
-    gemini_cache.delete_cache(client, cache.name)
-    print("Explicit cache deleted. Done.")
+    print_explicit_cache_overhead(explicit_stats, explicit_overhead)
+    print("Done.")
 
 
 if __name__ == "__main__":

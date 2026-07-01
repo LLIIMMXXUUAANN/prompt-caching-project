@@ -8,6 +8,11 @@ A small learning project comparing Gemini 2.5 Flash's caching modes:
 - **Explicit cache** — creates a `CachedContent` resource once via the
   `google-genai` SDK and references it for every question.
 
+Pricing constants in `pricing.py` are based on
+[Gemini 2.5 Flash's official pricing page](https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash) —
+check that page for current rates before relying on this project's cost
+estimates for real budgeting.
+
 ## Setup
 
 1. Copy `.env.example` to `.env` and add your Gemini API key
@@ -40,16 +45,24 @@ Mode 3/3: Explicit cache...
 
 Mode              Calls  Prompt tok  Cached tok  Output tok  Think tok  Avg latency  Est. cost
 ----------------------------------------------------------------------------------------------
-No cache              6        9881        2020         302       1883        3.00s $ 0.007881
-Implicit cache        6        9881        1010         301       1868        2.68s $ 0.008114
-Explicit cache        6        9887        9756         304       1731        2.84s $ 0.005419
+No cache              6        9881        1010         303       1816        2.62s $ 0.007989
+Implicit cache        6        9881        2020         299       1718        2.61s $ 0.007461
+Explicit cache        6        9887        9756         298       1785        2.60s $ 0.005539
 
-Explicit cache deleted. Done.
+Explicit cache overhead (not included in the table's Est. cost column):
+  Cache creation  (1626 tokens, billed at input rate): $0.000488
+  Cache storage   (alive 15.6s): $0.000007
+  Per-question usage (from table above): $0.005539
+  Total explicit cache cost: $0.006034
+
+Done.
 ```
 
-Note the "No cache" row can still show nonzero cached tokens (as above) — Gemini's
-implicit caching can kick in even on calls not deliberately using an explicit
-cache, since both "No cache" and "Implicit cache" modes make the identical
+Either the "No cache" or "Implicit cache" row can show nonzero cached
+tokens on any given run — sometimes both do (as in the example above),
+sometimes neither does, since it depends on unpredictable server-side
+caching behavior. Gemini's implicit caching can kick in on calls not
+deliberately using an explicit cache, because both modes make the identical
 underlying API call. That's expected, not a bug: it's exactly the behavior
 this project is here to demonstrate.
 
@@ -73,6 +86,31 @@ re-encoding the cached prefix would matter more for latency with a much
 larger cached document; at this sample document's size (~1,600 tokens) the
 effect is small and easily swamped by normal network/server variance. Cost
 savings, on the other hand, show up reliably every run.
+
+The table's "Est. cost" column only covers the per-question generation
+cost — it's deliberately an apples-to-apples number across all 3 rows.
+Explicit caching has two more cost components that don't apply to the
+other modes, printed separately right after the table instead of being
+folded silently into the same number:
+
+- **Cache creation** — the first time Google processes the document to
+  build the cache, it's billed once at the standard input rate (not the
+  discounted cached rate — that discount only applies to later calls that
+  reference the cache).
+- **Cache storage** — Google charges $1.00 per 1M cached tokens per hour
+  just for the cache existing. `main.py` creates the cache, runs all 6
+  questions, then deletes it immediately afterward, measuring the real
+  elapsed time in between — so in this run the cache only existed for
+  ~15 seconds and the storage fee is a tiny fraction of a cent. A cache
+  kept alive much longer (or holding a much larger document) would see
+  this cost become more significant.
+
+Even adding creation + storage on top of the per-question cost, the
+Explicit cache mode's true total (see "Total explicit cache cost" above)
+is still cheaper than the No cache baseline in this example — the
+discount on repeated cached-token usage outweighs the one-time creation
+fee once you're asking more than a couple of questions against the same
+document.
 
 ## Development
 
