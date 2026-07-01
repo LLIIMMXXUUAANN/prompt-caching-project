@@ -1,0 +1,25 @@
+[project]
+name = "prompt-caching-project"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=2.10.0",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+    "ty>=0.0.55",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.environment]
+python-version = "3.11"
