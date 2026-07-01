@@ -12,7 +12,22 @@ def test_fully_cached_prompt_bills_cached_rate_only():
     cost = estimate_generation_cost(
         prompt_tokens=1_000_000, cached_tokens=1_000_000, output_tokens=0
     )
-    assert cost == 0.075
+    assert cost == 0.03
+
+
+def test_thinking_tokens_bill_at_output_rate():
+    cost = estimate_generation_cost(
+        prompt_tokens=0, cached_tokens=0, output_tokens=0, thinking_tokens=1_000_000
+    )
+    assert cost == 2.50
+
+
+def test_thinking_tokens_default_to_zero():
+    without_arg = estimate_generation_cost(prompt_tokens=1_000, cached_tokens=0, output_tokens=200)
+    with_zero = estimate_generation_cost(
+        prompt_tokens=1_000, cached_tokens=0, output_tokens=200, thinking_tokens=0
+    )
+    assert without_arg == with_zero
 
 
 def test_partial_cache_is_cheaper_than_no_cache():

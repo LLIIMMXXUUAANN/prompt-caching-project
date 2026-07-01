@@ -23,6 +23,7 @@ class ModeStats:
     total_prompt_tokens: int = 0
     total_cached_tokens: int = 0
     total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
     total_cost: float = 0.0
     total_latency: float = 0.0
     call_count: int = 0
@@ -31,10 +32,12 @@ class ModeStats:
         self.total_prompt_tokens += result.prompt_tokens
         self.total_cached_tokens += result.cached_tokens
         self.total_output_tokens += result.output_tokens
+        self.total_thinking_tokens += result.thinking_tokens
         self.total_cost += pricing.estimate_generation_cost(
             prompt_tokens=result.prompt_tokens,
             cached_tokens=result.cached_tokens,
             output_tokens=result.output_tokens,
+            thinking_tokens=result.thinking_tokens,
         )
         self.total_latency += result.latency_seconds
         self.call_count += 1
@@ -101,7 +104,7 @@ def run_explicit_cache_mode(
 def print_comparison_table(modes: list[ModeStats]) -> None:
     header = (
         f"{'Mode':<16} {'Calls':>6} {'Prompt tok':>11} {'Cached tok':>11} "
-        f"{'Output tok':>11} {'Avg latency':>12} {'Est. cost':>10}"
+        f"{'Output tok':>11} {'Think tok':>10} {'Avg latency':>12} {'Est. cost':>10}"
     )
     print()
     print(header)
@@ -110,43 +113,10 @@ def print_comparison_table(modes: list[ModeStats]) -> None:
         print(
             f"{stats.mode_name:<16} {stats.call_count:>6} "
             f"{stats.total_prompt_tokens:>11} {stats.total_cached_tokens:>11} "
-            f"{stats.total_output_tokens:>11} {stats.average_latency:>11.2f}s "
-            f"${stats.total_cost:>9.6f}"
+            f"{stats.total_output_tokens:>11} {stats.total_thinking_tokens:>10} "
+            f"{stats.average_latency:>11.2f}s ${stats.total_cost:>9.6f}"
         )
     print()
-
-
-def interactive_chat(client, cache_name: str, cache_expire_time, ttl_seconds: int) -> None:
-    print("Entering interactive chat against the explicit cache.")
-    print(f"Cache expires at {cache_expire_time} (TTL {ttl_seconds}s). Type 'quit' to exit.")
-    running_cost = 0.0
-    while True:
-        try:
-            question = input("> ").strip()
-        except EOFError:
-            break
-        if question.lower() in {"quit", "exit"}:
-            break
-        if not question:
-            continue
-        try:
-            result = gemini_cache.generate_with_cache(client, cache_name, question)
-        except Exception as exc:
-            print(f"Cache call failed (it may have expired): {exc}")
-            print("Exiting interactive chat.")
-            break
-        cost = pricing.estimate_generation_cost(
-            prompt_tokens=result.prompt_tokens,
-            cached_tokens=result.cached_tokens,
-            output_tokens=result.output_tokens,
-        )
-        running_cost += cost
-        print(result.text)
-        print(
-            f"  [tokens: {result.prompt_tokens} prompt / {result.cached_tokens} cached / "
-            f"{result.output_tokens} output | cost: ${cost:.6f} | "
-            f"running total: ${running_cost:.6f}]"
-        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,7 +124,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--doc", type=Path, default=DEFAULT_DOC_PATH, help="Path to the document to query"
     )
-    parser.add_argument("--no-chat", action="store_true", help="Skip the interactive chat tail")
     parser.add_argument(
         "--ttl", type=int, default=DEFAULT_TTL_SECONDS, help="Explicit cache TTL in seconds"
     )
@@ -190,9 +159,6 @@ def main() -> None:
     if cache is None:
         return
     assert cache.name is not None  # guaranteed by run_explicit_cache_mode's own check
-
-    if not args.no_chat:
-        interactive_chat(client, cache.name, cache.expire_time, args.ttl)
 
     gemini_cache.delete_cache(client, cache.name)
     print("Explicit cache deleted. Done.")

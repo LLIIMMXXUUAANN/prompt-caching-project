@@ -11,6 +11,9 @@ from google.genai import types
 
 MODEL_NAME = "gemini-2.5-flash"
 EXPLICIT_CACHE_MIN_TOKENS = 1024
+# temperature=0 makes generation near-deterministic (greedy decoding), which
+# keeps repeated calls to the same prompt comparable across caching modes.
+GENERATION_TEMPERATURE = 0
 
 
 class MissingApiKeyError(RuntimeError):
@@ -23,6 +26,7 @@ class GenerationResult:
     prompt_tokens: int
     cached_tokens: int
     output_tokens: int
+    thinking_tokens: int
     latency_seconds: float
 
 
@@ -49,11 +53,16 @@ def _to_result(response: types.GenerateContentResponse, elapsed_seconds: float) 
     prompt_tokens = (usage.prompt_token_count or 0) if usage else 0
     cached_tokens = (usage.cached_content_token_count or 0) if usage else 0
     output_tokens = (usage.candidates_token_count or 0) if usage else 0
+    # thoughts_token_count is separate from candidates_token_count in the SDK
+    # (total_token_count = prompt + candidates + tool_use + thoughts), but
+    # Gemini bills thinking tokens at the output rate, so callers need it too.
+    thinking_tokens = (usage.thoughts_token_count or 0) if usage else 0
     return GenerationResult(
         text=response.text or "",
         prompt_tokens=prompt_tokens,
         cached_tokens=cached_tokens,
         output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
         latency_seconds=elapsed_seconds,
     )
 
@@ -63,6 +72,7 @@ def generate_without_cache(client: genai.Client, doc_text: str, question: str) -
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=[doc_text, question],
+        config=types.GenerateContentConfig(temperature=GENERATION_TEMPERATURE),
     )
     return _to_result(response, time.monotonic() - start)
 
@@ -86,7 +96,9 @@ def generate_with_cache(client: genai.Client, cache_name: str, question: str) ->
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=question,
-        config=types.GenerateContentConfig(cached_content=cache_name),
+        config=types.GenerateContentConfig(
+            cached_content=cache_name, temperature=GENERATION_TEMPERATURE
+        ),
     )
     return _to_result(response, time.monotonic() - start)
 
